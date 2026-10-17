@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "HTTP Video Chat Broadcaster",
+  "version": "1.2.0",
+  "description": "Captures camera/mic in extension, publishes via bridge in an HTTP page.",
+  "permissions": ["storage", "scripting", "tabs"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Video Chat Broadcaster"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

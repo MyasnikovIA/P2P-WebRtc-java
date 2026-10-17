@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: system-ui, sans-serif; width: 320px; padding: 12px; }
+    label { display: block; margin: 10px 0 2px; font-size: 12px; color: #444; }
+    input { width: 100%; box-sizing: border-box; padding: 5px; font-size: 13px; }
+    button { margin-top: 10px; width: 100%; padding: 7px; font-size: 13px; cursor: pointer; }
+    #info, #status { margin-top: 8px; font-size: 12px; color: #666; min-height: 16px; }
+    .hint { font-size: 11px; color: #999; margin-top: 2px; }
+    code { background: #eee; padding: 1px 4px; border-radius: 3px; }
+  </style>
+</head>
+<body>
+<h3 style="margin:0 0 4px">Video Chat</h3>
+
+<label for="server">Server (host:port, http(s):// или ws(s)://)</label>
+<input id="server" placeholder="192.168.1.100:8080">
+<div class="hint">Пусто = использовать адрес текущей вкладки.</div>
+
+<label for="room">Room</label>
+<input id="room" value="main">
+
+<button id="start">Start broadcasting</button>
+<button id="stop">Stop</button>
+<div id="info"></div>
+<div id="status"></div>
+<script src="popup.js"></script>
+</body>
+</html>

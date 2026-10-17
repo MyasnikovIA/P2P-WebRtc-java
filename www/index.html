@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <title>WebVideoChat — viewer</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 900px; margin: 20px auto; padding: 0 12px; background: #fafafa; color: #222; }
+        h1 { margin: 0 0 12px; font-size: 20px; }
+        .row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+        input { padding: 6px 8px; font-size: 14px; width: 160px; }
+        button { padding: 6px 14px; font-size: 14px; cursor: pointer; }
+        button.primary { background: #2a7ae2; color: white; border: none; }
+        button:disabled { opacity: .5; cursor: not-allowed; }
+        #status { font-size: 13px; color: #666; margin-bottom: 8px; }
+        video { width: 100%; max-width: 720px; background: #000; border-radius: 8px; display: block; }
+        #unmuteBtn { display: none; background: #e0a800; color: black; border: none; font-weight: bold; }
+        #unmuteBtn.visible { display: inline-block; }
+        #broadcast-panel { display: none; background: #e8f0fe; padding: 12px; border-radius: 8px; border: 1px solid #c2d7f7; }
+        #extension-status { margin-bottom: 12px; font-size: 14px; font-weight: bold; }
+    </style>
+</head>
+<body>
+<h1>WebVideoChat</h1>
+
+<div id="extension-status">Проверка расширения...</div>
+
+<div class="row" id="broadcast-panel">
+    <span>Хотите вещать?</span>
+    <button id="btn-broadcast" class="primary">📷 Начать трансляцию с камеры</button>
+</div>
+
+<div class="row">
+    <label>Room: <input id="room" value="main"></label>
+    <button id="watch" class="primary">Watch</button>
+    <button id="stop" disabled>Stop</button>
+    <button id="unmuteBtn">🔊 Включить звук</button>
+</div>
+<div id="status">idle</div>
+<video id="remote" autoplay playsinline controls></video>
+
+<script>
+    const $ = id => document.getElementById(id);
+    let ws = null, pc = null;
+    const video = $('remote');
+
+    // --- 1. Взаимодействие с расширением ---
+    function callExtension(type, payload) {
+        return new Promise((resolve) => {
+            const id = Math.random().toString(36).slice(2);
+            const handler = (e) => {
+                if (e.source !== window) return;
+                if (e.data && e.data.__replyTo === id) {
+                    window.removeEventListener('message', handler);
+                    resolve(e.data);
+                }
+            };
+            window.addEventListener('message', handler);
+            window.postMessage({ __toExt: true, type, payload, __id: id }, '*');
+            setTimeout(() => {
+                window.removeEventListener('message', handler);
+                resolve(null); // timeout
+            }, 1000);
+        });
+    }
+
+    function updateExtStatus(isReady) {
+        if (isReady) {
+            $('extension-status').innerHTML = '<span style="color:green">✔ Расширение установлено. Вы можете начать трансляцию.</span>';
+            $('broadcast-panel').style.display = 'flex';
+        } else {
+            $('extension-status').innerHTML = '<span style="color:red">✖ Расширение не установлено (или страница не перезагружена). Установите плагин и нажмите F5.</span>';
+            $('broadcast-panel').style.display = 'none';
+        }
+    }
+
+    let extReady = false;
+
+    // 1.1. Слушаем прямой сигнал от bridge.js
+    window.addEventListener('message', (e) => {
+        if (e.source !== window) return;
+        if (e.data && e.data.__extReady && !extReady) {
+            extReady = true;
+            updateExtStatus(true);
+        }
+    });
+
+    // 1.2. Пингуем расширение каждые 500 мс на случай, если bridge.js загрузился раньше
+    let pingCount = 0;
+    const pingInterval = setInterval(async () => {
+        if (extReady) { clearInterval(pingInterval); return; }
+        const res = await callExtension('ext-ping');
+        if (res && res.ok) {
+            extReady = true;
+            updateExtStatus(true);
+            clearInterval(pingInterval);
+        }
+        pingCount++;
+        if (pingCount > 10) { // 5 секунд попыток
+            clearInterval(pingInterval);
+            if (!extReady) updateExtStatus(false);
+        }
+    }, 500);
+
+    // Кнопка "Начать трансляцию"
+    $('btn-broadcast').onclick = async () => {
+        const room = $('room').value.trim() || 'main';
+        $('btn-broadcast').disabled = true;
+        $('btn-broadcast').textContent = 'Запуск...';
+
+        const res = await callExtension('start-broadcast', { room });
+
+        $('btn-broadcast').disabled = false;
+        $('btn-broadcast').textContent = '📷 Начать трансляцию с камеры';
+
+        if (res && res.ok) {
+            $('status').textContent = 'Расширение запущено. Проверьте окно трансляции.';
+        } else {
+            $('status').textContent = 'Ошибка запуска: ' + (res ? res.error : 'нет ответа');
+        }
+    };
+
+    // --- 2. Логика просмотра (как была) ---
+    async function tryPlay() {
+        try {
+            await video.play();
+            $('unmuteBtn').classList.remove('visible');
+            return true;
+        } catch (e) {
+            $('unmuteBtn').classList.add('visible');
+            $('status').textContent = 'Нажмите "🔊 Включить звук" для прослушивания';
+            return false;
+        }
+    }
+
+    $('unmuteBtn').onclick = async () => {
+        video.muted = false;
+        await tryPlay();
+    };
+
+    function ensurePeerConnection() {
+        if (pc) return pc;
+        pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+
+        pc.ontrack = (e) => {
+            if (!video.srcObject) {
+                video.srcObject = e.streams[0];
+                video.muted = false;
+                window.remoteAudioStream = new MediaStream(e.streams[0].getAudioTracks());
+                tryPlay();
+            }
+        };
+        pc.onicecandidate = (e) => {
+            if (e.candidate && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ target: 'publisher', candidate: e.candidate }));
+            }
+        };
+        pc.onconnectionstatechange = () => {
+            if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+                $('status').textContent = 'disconnected (' + pc.connectionState + ')';
+                if (pc) { pc.close(); pc = null; }
+            }
+        };
+        return pc;
+    }
+
+    function watch() {
+        const room = $('room').value.trim() || 'main';
+        const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/subscribe?room=${encodeURIComponent(room)}`;
+        $('status').textContent = 'connecting ' + url;
+
+        ws = new WebSocket(url);
+        ws.binaryType = 'arraybuffer';
+
+        ws.onmessage = async (ev) => {
+            if (typeof ev.data !== 'string') return;
+            try {
+                const msg = JSON.parse(ev.data);
+                if (msg.viewerId) $('status').textContent = 'connected, waiting for stream...';
+
+                if (msg.sdp) {
+                    const peer = ensurePeerConnection();
+                    await peer.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+                    const answer = await peer.createAnswer();
+                    await peer.setLocalDescription(answer);
+                    ws.send(JSON.stringify({ target: 'publisher', sdp: peer.localDescription }));
+                    $('status').textContent = 'streaming (WebRTC)';
+                } else if (msg.candidate) {
+                    if (pc) await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+                }
+            } catch (e) { console.error('[viewer] msg error', e); }
+        };
+
+        ws.onclose = (e) => {
+            $('status').textContent = 'closed (code ' + e.code + ')';
+            $('watch').disabled = false; $('stop').disabled = true;
+            if (pc) { pc.close(); pc = null; }
+        };
+
+        $('watch').disabled = true; $('stop').disabled = false;
+    }
+
+    function stop() {
+        if (pc) { pc.close(); pc = null; }
+        if (ws) { ws.close(); ws = null; }
+        if (video.srcObject) video.srcObject = null;
+        window.remoteAudioStream = null;
+        $('status').textContent = 'stopped';
+        $('watch').disabled = false; $('stop').disabled = true;
+        $('unmuteBtn').classList.remove('visible');
+    }
+
+    $('watch').onclick = watch;
+    $('stop').onclick = stop;
+
+    const p = new URLSearchParams(location.search);
+    if (p.get('room')) $('room').value = p.get('room');
+</script>
+</body>
+</html>
